@@ -1,0 +1,997 @@
+```html
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EcoKSK - Sustainable School System (SDG 12)</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- QRCode.js CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- Html5Qrcode CDN -->
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0fdf4',
+              100: '#dcfce7',
+              200: '#bbf7d0',
+              300: '#86efac',
+              400: '#4ade80',
+              500: '#22c55e',
+              600: '#16a34a',
+              700: '#15803d',
+              800: '#166534',
+              900: '#14532d',
+            },
+            ocean: {
+              50: '#f0f9ff',
+              100: '#e0f2fe',
+              500: '#0ea5e9',
+              600: '#0284c7',
+              700: '#0369a1',
+            }
+          }
+        }
+      }
+    };
+
+    const defaultUsers = [
+      { id: 'STU001', name: 'Aiman Hakim bin Azman', role: 'student', classStr: '5 Al-Farabi', points: 450, avoidedPlastic: 35, email: 'student@school.edu.my' },
+      { id: 'TEA001', name: 'Cikgu Noraini binti Yusof', role: 'teacher', classStr: 'Guru Penasihat Eco', points: 680, avoidedPlastic: 52, email: 'teacher@school.edu.my' },
+      { id: 'CAN001', name: 'Staf Kantin Utama', role: 'canteen', classStr: 'Kaunter Kantin', points: 0, avoidedPlastic: 0, email: 'canteen@school.edu.my' },
+      { id: 'MGT001', name: 'Pengetua / Pentadbir', role: 'management', classStr: 'Pengurusan Sekolah', points: 0, avoidedPlastic: 0, email: 'admin@school.edu.my' }
+    ];
+
+    function loadSavedUsers() {
+      const saved = localStorage.getItem('ecoksk_all_users');
+      if (saved) {
+        try { return JSON.parse(saved); } catch(e) { return defaultUsers; }
+      }
+      localStorage.setItem('ecoksk_all_users', JSON.stringify(defaultUsers));
+      return defaultUsers;
+    }
+
+    const state = {
+      currentUser: null,
+      users: loadSavedUsers(),
+      activeTxUser: null,
+      transactions: JSON.parse(localStorage.getItem('ecoksk_tx_history')) || [
+        { id: 'TX-101', time: '10:15 AM', userId: 'STU001', userName: 'Aiman Hakim bin Azman', role: 'student', container: 'own', drink: 'own', utensils: 'reusable', points: 25 },
+        { id: 'TX-102', time: '10:20 AM', userId: 'TEA001', userName: 'Cikgu Noraini binti Yusof', role: 'teacher', container: 'own', drink: 'plastic', utensils: 'reusable', points: 15 }
+      ],
+      html5QrcodeScanner: null
+    };
+
+    function saveUsersToStorage() {
+      localStorage.setItem('ecoksk_all_users', JSON.stringify(state.users));
+    }
+
+    function playBeepSound() {
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = 880;
+        gain.gain.value = 0.1;
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.15);
+      } catch(e) {}
+    }
+
+    function showToast(msg, type = 'info') {
+      const container = document.getElementById('toast-container');
+      if (!container) return;
+      const toast = document.createElement('div');
+      const colors = {
+        success: 'bg-emerald-600 text-white',
+        warning: 'bg-amber-500 text-white',
+        error: 'bg-rose-600 text-white',
+        info: 'bg-slate-800 text-white'
+      };
+      toast.className = `p-4 rounded-xl shadow-lg text-xs font-semibold flex items-center justify-between gap-3 ${colors[type] || colors.info} transition-all duration-300 pointer-events-auto`;
+      toast.innerHTML = `<span>${msg}</span><button onclick="this.parentElement.remove()" class="opacity-70 hover:opacity-100">✕</button>`;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+      }, 4000);
+    }
+
+    let confirmResolver = null;
+    function customConfirm(title, message) {
+      return new Promise((resolve) => {
+        confirmResolver = resolve;
+        const modal = document.getElementById('confirm-modal');
+        if (!modal) return resolve(false);
+        document.getElementById('confirm-title').innerText = title;
+        document.getElementById('confirm-message').innerText = message;
+        modal.classList.remove('hidden');
+      });
+    }
+
+    function closeConfirmModal(result) {
+      const modal = document.getElementById('confirm-modal');
+      if (modal) modal.classList.add('hidden');
+      if (confirmResolver) {
+        confirmResolver(result);
+        confirmResolver = null;
+      }
+    }
+
+    function populateScannerDropdown() {
+      const select = document.getElementById('manual-scan-user-select');
+      if (!select) return;
+      let html = '<option value="">-- Pilih Pengguna Terdaftar --</option>';
+      state.users.forEach(u => {
+        if (u.role === 'student' || u.role === 'teacher') {
+          html += `<option value="${u.id}">${u.name} (${u.id} - ${u.role === 'student' ? 'Pelajar' : 'Guru'})</option>`;
+        }
+      });
+      select.innerHTML = html;
+    }
+
+    function handleRegister(e) {
+      e.preventDefault();
+      const name = document.getElementById('reg-fullname').value.trim();
+      const role = document.getElementById('reg-role').value;
+      const classStr = document.getElementById('reg-class').value.trim() || (role === 'teacher' ? 'Guru' : 'Tingkatan 1');
+      const email = document.getElementById('reg-email').value.trim();
+
+      if (!name || !email) {
+        showToast('Sila isi maklumat dengan lengkap.', 'warning');
+        return;
+      }
+
+      const existing = state.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+      if (existing) {
+        showToast('Email ini telah mendaftar. Sila guna fungsi Sign In.', 'warning');
+        return;
+      }
+
+      const prefix = role === 'teacher' ? 'TEA' : 'STU';
+      const randomNum = Math.floor(100 + Math.random() * 900);
+      const newId = `${prefix}${randomNum}`;
+
+      const newUser = {
+        id: newId,
+        name: name,
+        role: role,
+        classStr: classStr,
+        points: 50,
+        avoidedPlastic: 0,
+        email: email
+      };
+
+      state.users.push(newUser);
+      saveUsersToStorage();
+      populateScannerDropdown();
+
+      showToast(`Pendaftaran Berjaya! ID QR anda: ${newId}. Diberi 50 Mata Bonus!`, 'success');
+      setCurrentUser(newUser);
+      document.getElementById('signup-form').reset();
+    }
+
+    function switchAuthTab(tab) {
+      const loginForm = document.getElementById('login-form');
+      const signupForm = document.getElementById('signup-form');
+      const loginBtn = document.getElementById('tab-login-btn');
+      const signupBtn = document.getElementById('tab-signup-btn');
+
+      if (!loginForm || !signupForm || !loginBtn || !signupBtn) return;
+
+      if (tab === 'login') {
+        loginForm.classList.remove('hidden');
+        signupForm.classList.add('hidden');
+        loginBtn.className = "flex-1 pb-2 text-center text-sm font-semibold border-b-2 border-brand-600 text-brand-600 transition-colors";
+        signupBtn.className = "flex-1 pb-2 text-center text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-600 transition-colors";
+      } else {
+        loginForm.classList.add('hidden');
+        signupForm.classList.remove('hidden');
+        signupBtn.className = "flex-1 pb-2 text-center text-sm font-semibold border-b-2 border-brand-600 text-brand-600 transition-colors";
+        loginBtn.className = "flex-1 pb-2 text-center text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-600 transition-colors";
+      }
+    }
+
+    function toggleRegClassField() {
+      const roleEl = document.getElementById('reg-role');
+      const classContainer = document.getElementById('reg-class-container');
+      if (!roleEl || !classContainer) return;
+      
+      if (roleEl.value === 'teacher') {
+        classContainer.classList.add('hidden');
+      } else {
+        classContainer.classList.remove('hidden');
+      }
+    }
+
+    function handleLogin(e) {
+      e.preventDefault();
+      const role = document.getElementById('login-role').value;
+      const email = document.getElementById('login-email').value.trim();
+
+      let user = state.users.find(u => u.email.toLowerCase() === email.toLowerCase() && u.role === role);
+      if (!user) {
+        user = state.users.find(u => u.role === role);
+      }
+
+      if (user) {
+        setCurrentUser(user);
+        showToast(`Selamat Kembali, ${user.name}!`, 'success');
+      } else {
+        showToast('Pengguna tidak dijumpai. Sila daftar akaun baharu.', 'error');
+      }
+    }
+
+    function setCurrentUser(user) {
+      state.currentUser = user;
+      localStorage.setItem('ecoksk_active_user_id', user.id);
+
+      const authOverlay = document.getElementById('auth-overlay');
+      if (authOverlay) authOverlay.classList.add('hidden');
+
+      const appSidebar = document.getElementById('app-sidebar');
+      if (appSidebar) appSidebar.classList.remove('hidden');
+
+      const avatar = user.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+      const avatarEl = document.getElementById('nav-user-avatar');
+      if (avatarEl) avatarEl.innerText = avatar;
+
+      const nameEl = document.getElementById('nav-user-name');
+      if (nameEl) nameEl.innerText = user.name;
+
+      const roleEl = document.getElementById('nav-user-role');
+      if (roleEl) roleEl.innerText = `${user.role === 'student' ? 'Pelajar' : user.role === 'teacher' ? 'Guru' : user.role === 'canteen' ? 'Staf Kantin' : 'Pentadbir'} (${user.classStr})`;
+
+      renderSidebarMenu();
+
+      if (user.role === 'canteen') {
+        state.activeTxUser = state.users.find(u => u.role === 'student' || u.role === 'teacher') || state.users[0];
+        navigateTo('canteen');
+      } else {
+        navigateTo('dashboard');
+      }
+
+      updateAllUI();
+    }
+
+    function handleLogout() {
+      state.currentUser = null;
+      localStorage.removeItem('ecoksk_active_user_id');
+      
+      const authOverlay = document.getElementById('auth-overlay');
+      if (authOverlay) authOverlay.classList.remove('hidden');
+
+      const appSidebar = document.getElementById('app-sidebar');
+      if (appSidebar) appSidebar.classList.add('hidden');
+
+      showToast('Anda telah log keluar.', 'info');
+    }
+
+    function renderSidebarMenu() {
+      const menu = document.getElementById('sidebar-menu');
+      if (!menu) return;
+
+      const role = state.currentUser ? state.currentUser.role : 'student';
+      let links = [];
+
+      if (role === 'student' || role === 'teacher') {
+        links = [
+          { id: 'dashboard', label: 'Papan Utama', icon: 'layout-dashboard' },
+          { id: 'qrcode', label: 'Kod QR Saya', icon: 'qr-code' },
+          { id: 'history', label: 'Rekod Transaksi', icon: 'history' },
+          { id: 'rewards', label: 'Tebuk Ganjaran', icon: 'gift' },
+          { id: 'leaderboard', label: 'Papan Kedudukan', icon: 'trophy' }
+        ];
+      } else if (role === 'canteen') {
+        links = [
+          { id: 'canteen', label: 'Kaunter Kantin Express', icon: 'store' },
+          { id: 'leaderboard', label: 'Papan Kedudukan', icon: 'trophy' }
+        ];
+      } else if (role === 'management') {
+        links = [
+          { id: 'dashboard', label: 'Ringkasan Pentadbir', icon: 'bar-chart-3' },
+          { id: 'leaderboard', label: 'Papan Kedudukan Sekolah', icon: 'trophy' }
+        ];
+      }
+
+      let html = '';
+      links.forEach(link => {
+        html += `
+          <button onclick="navigateTo('${link.id}')" id="nav-btn-${link.id}" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition text-sm font-semibold text-slate-400 hover:bg-slate-800 hover:text-white">
+            <i data-lucide="${link.icon}" class="w-4 h-4"></i> ${link.label}
+          </button>
+        `;
+      });
+
+      menu.innerHTML = html;
+      if (window.lucide) lucide.createIcons();
+    }
+
+    function navigateTo(pageId) {
+      const pages = ['dashboard', 'qrcode', 'canteen', 'history', 'rewards', 'leaderboard'];
+      pages.forEach(p => {
+        const el = document.getElementById(`page-${p}`);
+        if (el) el.classList.add('hidden');
+        const navBtn = document.getElementById(`nav-btn-${p}`);
+        if (navBtn) {
+          navBtn.classList.remove('bg-brand-600', 'text-white');
+          navBtn.classList.add('text-slate-400');
+        }
+      });
+
+      const target = document.getElementById(`page-${pageId}`);
+      if (target) target.classList.remove('hidden');
+
+      const activeNav = document.getElementById(`nav-btn-${pageId}`);
+      if (activeNav) {
+        activeNav.classList.add('bg-brand-600', 'text-white');
+        activeNav.classList.remove('text-slate-400');
+      }
+
+      if (pageId === 'qrcode') renderQRCode();
+      if (pageId === 'canteen') populateScannerDropdown();
+      updateAllUI();
+    }
+
+    function renderQRCode() {
+      const qrContainer = document.getElementById('qrcode-display');
+      if (!qrContainer || !state.currentUser) return;
+      qrContainer.innerHTML = '';
+      const payload = JSON.stringify({
+        id: state.currentUser.id,
+        name: state.currentUser.name,
+        role: state.currentUser.role
+      });
+
+      new QRCode(qrContainer, {
+        text: payload,
+        width: 180,
+        height: 180,
+        colorDark: "#15803d",
+        colorLight: "#ffffff"
+      });
+
+      document.getElementById('qr-user-name').innerText = state.currentUser.name;
+      document.getElementById('qr-user-id').innerText = `ID: ${state.currentUser.id}`;
+      document.getElementById('qr-user-class').innerText = `Peranan: ${state.currentUser.role === 'student' ? 'Pelajar' : 'Guru'} (${state.currentUser.classStr})`;
+      document.getElementById('qr-user-points').innerText = state.currentUser.points;
+    }
+
+    function simulateQRScan() {
+      const modal = document.getElementById('scanner-modal');
+      if (!modal) return;
+      modal.classList.remove('hidden');
+      populateScannerDropdown();
+
+      const loading = document.getElementById('camera-loading');
+      if (loading) loading.classList.remove('hidden');
+
+      if (typeof Html5Qrcode !== 'undefined') {
+        if (state.html5QrcodeScanner) {
+          state.html5QrcodeScanner.clear().catch(() => {});
+        }
+        state.html5QrcodeScanner = new Html5Qrcode("reader");
+        state.html5QrcodeScanner.start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 220, height: 220 } },
+          (decodedText) => {
+            playBeepSound();
+            handleQRScannedData(decodedText);
+            closeScannerModal();
+          },
+          () => {}
+        ).then(() => {
+          if (loading) loading.classList.add('hidden');
+        }).catch(() => {
+          if (loading) loading.classList.add('hidden');
+        });
+      }
+    }
+
+    function closeScannerModal() {
+      const modal = document.getElementById('scanner-modal');
+      if (modal) modal.classList.add('hidden');
+      if (state.html5QrcodeScanner) {
+        state.html5QrcodeScanner.stop().then(() => {
+          state.html5QrcodeScanner.clear();
+        }).catch(() => {});
+      }
+    }
+
+    function scanSelectedUserFromDropdown() {
+      const userId = document.getElementById('manual-scan-user-select').value;
+      if (!userId) {
+        showToast('Sila pilih pengguna daripada senarai.', 'warning');
+        return;
+      }
+      playBeepSound();
+      handleQRScannedData(userId);
+      closeScannerModal();
+    }
+
+    function handleQRScannedData(dataStr) {
+      let scannedId = dataStr;
+      try {
+        const parsed = JSON.parse(dataStr);
+        if (parsed && parsed.id) scannedId = parsed.id;
+      } catch(e) {}
+
+      const user = state.users.find(u => u.id === scannedId);
+      if (user) {
+        state.activeTxUser = user;
+        updateCanteenTxPanel();
+        showToast(`Imbasan Berjaya! Pembeli: ${user.name} (${user.id})`, 'success');
+      } else {
+        showToast('ID QR tidak dijumpai dalam pangkalan data.', 'error');
+      }
+    }
+
+    function handleCanteenTransaction(e) {
+      if (e) e.preventDefault();
+      if (!state.activeTxUser) {
+        showToast('Sila imbas pengguna terlebih dahulu!', 'warning');
+        return;
+      }
+
+      const form = document.getElementById('canteen-form');
+      const foodVal = form.food_container.value;
+      const drinkVal = form.drink_container.value;
+      const utensilsVal = form.utensils.value;
+
+      let pts = 0;
+      let avoided = 0;
+
+      if (foodVal === 'own') { pts += 10; avoided++; }
+      if (drinkVal === 'own') { pts += 10; avoided++; }
+      if (utensilsVal === 'reusable') { pts += 5; avoided++; }
+
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      const tx = {
+        id: `TX-${Math.floor(100 + Math.random() * 900)}`,
+        time: timeStr,
+        userId: state.activeTxUser.id,
+        userName: state.activeTxUser.name,
+        role: state.activeTxUser.role,
+        container: foodVal,
+        drink: drinkVal,
+        utensils: utensilsVal,
+        points: pts
+      };
+
+      state.transactions.unshift(tx);
+      localStorage.setItem('ecoksk_tx_history', JSON.stringify(state.transactions));
+
+      state.activeTxUser.points += pts;
+      state.activeTxUser.avoidedPlastic += avoided;
+      saveUsersToStorage();
+
+      playBeepSound();
+      showToast(`Transaksi disimpan! +${pts} mata diberikan kepada ${state.activeTxUser.name}.`, 'success');
+      updateAllUI();
+    }
+
+    function updateCanteenTxPanel() {
+      if (!state.activeTxUser) return;
+      const user = state.activeTxUser;
+      const avatar = user.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+      
+      const avatarEl = document.getElementById('canteen-user-avatar');
+      if (avatarEl) avatarEl.innerText = avatar;
+
+      const nameEl = document.getElementById('canteen-user-name');
+      if (nameEl) nameEl.innerText = user.name;
+
+      const idEl = document.getElementById('canteen-user-id');
+      if (idEl) idEl.innerText = user.id;
+
+      const classEl = document.getElementById('canteen-user-class');
+      if (classEl) classEl.innerText = user.classStr;
+
+      const ptsEl = document.getElementById('canteen-user-pts');
+      if (ptsEl) ptsEl.innerText = user.points;
+    }
+
+    function updateAllUI() {
+      const u = state.currentUser;
+      if (!u) return;
+
+      const ptsEl = document.getElementById('dash-eco-points');
+      if (ptsEl) ptsEl.innerText = u.points;
+
+      const plasticEl = document.getElementById('dash-plastic-avoided');
+      if (plasticEl) plasticEl.innerText = `${u.avoidedPlastic} item`;
+
+      const welcomeTitle = document.getElementById('dash-welcome-title');
+      if (welcomeTitle) welcomeTitle.innerText = `Selamat Kembali, ${u.name.split(' ')[0]}! 🌱`;
+
+      const rewardsBal = document.getElementById('rewards-balance');
+      if (rewardsBal) rewardsBal.innerText = u.points;
+
+      updateCanteenTxPanel();
+      renderCanteenLogTable();
+      renderStudentHistoryTable();
+      renderLeaderboard();
+      renderRewardsGrid();
+    }
+
+    function renderCanteenLogTable() {
+      const tbody = document.getElementById('canteen-log-tbody');
+      if (!tbody) return;
+
+      let html = '';
+      state.transactions.slice(0, 10).forEach(tx => {
+        html += `
+          <tr class="hover:bg-slate-50 transition">
+            <td class="py-3 px-4 font-mono text-slate-500">${tx.time}</td>
+            <td class="py-3 px-4 font-bold text-slate-800">${tx.userName}</td>
+            <td class="py-3 px-4 font-mono text-xs text-brand-700">${tx.userId}</td>
+            <td class="py-3 px-4">${tx.container === 'own' ? '♻️ Bawa Sendiri' : '🛍️ Plastik'}</td>
+            <td class="py-3 px-4">${tx.drink === 'own' ? '🥤 Botol Sendiri' : '🥤 Plastik'}</td>
+            <td class="py-3 px-4">${tx.utensils === 'reusable' ? '🥄 Sudu Sendiri' : '🍴 Plastik'}</td>
+            <td class="py-3 px-4 text-right font-extrabold text-brand-600">+${tx.points} pts</td>
+          </tr>
+        `;
+      });
+      tbody.innerHTML = html;
+    }
+
+    function renderStudentHistoryTable() {
+      const tbody = document.getElementById('student-history-tbody');
+      if (!tbody || !state.currentUser) return;
+
+      const userTxs = state.transactions.filter(t => t.userId === state.currentUser.id);
+      let html = '';
+      userTxs.forEach(tx => {
+        html += `
+          <tr class="hover:bg-slate-50 transition">
+            <td class="py-3 px-4 font-mono text-slate-500">${tx.time}</td>
+            <td class="py-3 px-4">${tx.container === 'own' ? '♻️ Bekas Sendiri (+10)' : '🛍️ Plastik (+0)'}</td>
+            <td class="py-3 px-4">${tx.drink === 'own' ? '🥤 Botol Sendiri (+10)' : '🥤 Cawan Plastik (+0)'}</td>
+            <td class="py-3 px-4">${tx.utensils === 'reusable' ? '🥄 Sudu Sendiri (+5)' : '🍴 Sudu Plastik (+0)'}</td>
+            <td class="py-3 px-4 text-right font-bold text-brand-600">+${tx.points} pts</td>
+          </tr>
+        `;
+      });
+      tbody.innerHTML = html || '<tr><td colspan="5" class="py-4 text-center text-slate-400">Tiada rekod transaksi ditemui.</td></tr>';
+    }
+
+    function renderLeaderboard() {
+      const container = document.getElementById('leaderboard-list');
+      if (!container) return;
+
+      const sorted = [...state.users].sort((a, b) => b.points - a.points);
+      let html = '';
+      sorted.forEach((u, idx) => {
+        html += `
+          <div class="flex items-center justify-between p-4 bg-white rounded-2xl border border-slate-100 shadow-sm">
+            <div class="flex items-center gap-3">
+              <span class="font-extrabold text-slate-400 text-sm w-6">#${idx + 1}</span>
+              <div>
+                <p class="font-bold text-slate-800 text-sm">${u.name}</p>
+                <p class="text-xs text-slate-400">${u.role === 'student' ? 'Pelajar' : 'Guru'} • ${u.classStr}</p>
+              </div>
+            </div>
+            <div class="text-right">
+              <span class="font-extrabold text-brand-600 text-sm">${u.points} pts</span>
+              <p class="text-[10px] text-slate-400">${u.avoidedPlastic} item plastik dielakkan</p>
+            </div>
+          </div>
+        `;
+      });
+      container.innerHTML = html;
+    }
+
+    function renderRewardsGrid() {
+      const grid = document.getElementById('rewards-grid');
+      if (!grid) return;
+
+      const items = [
+        { title: 'Voucher Makanan RM2', pts: 200, desc: 'Potongan harga RM2 untuk sebarang hidangan di kantin.' },
+        { title: 'Botol Air EcoKSK', pts: 500, desc: 'Botol air keluli tahan karat mesra alam.' },
+        { title: 'Lencana Wira Hijau', pts: 150, desc: 'Lencana rasmi program SDG 12 sekolah.' }
+      ];
+
+      let html = '';
+      items.forEach(item => {
+        html += `
+          <div class="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col justify-between space-y-4">
+            <div>
+              <h3 class="font-bold text-slate-800 text-base">${item.title}</h3>
+              <p class="text-xs text-slate-500 mt-1">${item.desc}</p>
+            </div>
+            <div class="flex items-center justify-between pt-2">
+              <span class="font-extrabold text-amber-500 text-sm">${item.pts} pts</span>
+              <button onclick="redeemReward('${item.title}', ${item.pts})" class="px-4 py-2 bg-brand-600 text-white rounded-xl text-xs font-bold hover:bg-brand-700 transition">Tebuk</button>
+            </div>
+          </div>
+        `;
+      });
+      grid.innerHTML = html;
+    }
+
+    async function redeemReward(title, cost) {
+      if (!state.currentUser) return;
+      if (state.currentUser.points < cost) {
+        showToast('Mata Eco anda tidak mencukupi.', 'error');
+        return;
+      }
+
+      const confirm = await customConfirm('Tebuk Ganjaran', `Adakah anda pasti mahu menebus "${title}" dengan ${cost} mata?`);
+      if (confirm) {
+        state.currentUser.points -= cost;
+        saveUsersToStorage();
+        showToast(`Ganjaran "${title}" berjaya ditebus!`, 'success');
+        updateAllUI();
+      }
+    }
+
+    window.onload = function() {
+      const activeId = localStorage.getItem('ecoksk_active_user_id');
+      if (activeId) {
+        const u = state.users.find(user => user.id === activeId);
+        if (u) {
+          setCurrentUser(u);
+          return;
+        }
+      }
+      switchAuthTab('login');
+      if (window.lucide) {
+        lucide.createIcons();
+      }
+    };
+  </script>
+  <style>
+    .glass-card {
+      background: rgba(255, 255, 255, 0.9);
+      backdrop-filter: blur(10px);
+    }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  </style>
+</head>
+<body class="bg-slate-50 font-sans text-slate-800 min-h-screen flex flex-col md:flex-row antialiased selection:bg-brand-500 selection:text-white">
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col gap-3 max-w-sm w-full pointer-events-none"></div>
+
+  <!-- Custom Confirm Modal -->
+  <div id="confirm-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 text-center space-y-4">
+      <div id="confirm-icon-bg" class="w-12 h-12 rounded-full bg-amber-100 text-amber-600 mx-auto flex items-center justify-center">
+        <i data-lucide="circle-help" class="w-6 h-6"></i>
+      </div>
+      <h3 id="confirm-title" class="text-lg font-bold text-slate-800">Pengesahan</h3>
+      <p id="confirm-message" class="text-xs text-slate-500 leading-relaxed">Adakah anda pasti untuk meneruskan?</p>
+      <div class="flex gap-3 pt-2">
+        <button id="confirm-cancel-btn" onclick="closeConfirmModal(false)" class="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition">Batal</button>
+        <button id="confirm-ok-btn" onclick="closeConfirmModal(true)" class="flex-1 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-xs font-semibold transition">Sahkan</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Canteen QR Scanner Modal -->
+  <div id="scanner-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center bg-slate-900/70 backdrop-blur-md p-4">
+    <div class="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 space-y-4 text-center relative overflow-hidden max-h-[90vh] overflow-y-auto">
+      <div class="flex justify-between items-center border-b pb-3 border-slate-100">
+        <h3 class="font-bold text-slate-800 text-base flex items-center gap-2">
+          <i data-lucide="camera" class="w-5 h-5 text-brand-600"></i> Pengimbas QR Kamera Kantin
+        </h3>
+        <button onclick="closeScannerModal()" class="text-slate-400 hover:text-slate-600 p-1">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- Real Camera Video Element Container -->
+      <div class="relative bg-slate-900 rounded-2xl overflow-hidden border-2 border-brand-500/50 min-h-[220px] flex flex-col items-center justify-center">
+        <div id="reader" class="w-full h-full"></div>
+        <div id="camera-loading" class="absolute inset-0 flex flex-col items-center justify-center text-white bg-slate-900 p-4 space-y-2">
+          <i data-lucide="camera" class="w-10 h-10 text-brand-500 animate-bounce"></i>
+          <p class="text-xs text-slate-300 font-medium">Memuatkan kamera...</p>
+        </div>
+      </div>
+
+      <!-- Manual Dropdown Scanner Fallback -->
+      <div class="bg-slate-50 p-4 rounded-2xl border border-slate-200 text-left space-y-2">
+        <label class="block text-xs font-bold text-slate-600 uppercase">Pilih Pengguna Manual (Sandaran)</label>
+        <select id="manual-scan-user-select" class="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-brand-500">
+          <option value="">-- Pilih Pengguna Terdaftar --</option>
+        </select>
+        <button onclick="scanSelectedUserFromDropdown()" class="w-full py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2">
+          <i data-lucide="check" class="w-4 h-4"></i> Pilih & Teruskan
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- AUTH OVERLAY CONTAINER -->
+  <div id="auth-overlay" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 md:p-8 relative overflow-hidden">
+      <div class="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-brand-500 via-ocean-500 to-brand-600"></div>
+
+      <div class="text-center mb-6">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-brand-100 text-brand-600 mb-3 shadow-inner">
+          <i data-lucide="leaf" class="w-8 h-8"></i>
+        </div>
+        <h1 class="text-2xl font-bold text-slate-800">EcoKSK</h1>
+        <p class="text-xs font-semibold tracking-wider text-brand-600 uppercase mt-1">SDG 12 – Responsible Consumption</p>
+      </div>
+
+      <!-- AUTH TABS -->
+      <div class="flex border-b border-slate-200 mb-6" id="auth-tabs">
+        <button id="tab-login-btn" onclick="switchAuthTab('login')" class="flex-1 pb-2 text-center text-sm font-semibold border-b-2 border-brand-600 text-brand-600 transition-colors">Sign In</button>
+        <button id="tab-signup-btn" onclick="switchAuthTab('signup')" class="flex-1 pb-2 text-center text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-600 transition-colors">Register Account</button>
+      </div>
+
+      <!-- LOGIN FORM -->
+      <form id="login-form" onsubmit="handleLogin(event)" class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Email Address</label>
+          <input type="email" id="login-email" placeholder="student@school.edu.my" required class="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-500">
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Login As Role</label>
+          <select id="login-role" class="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:border-brand-500">
+            <option value="student">Student</option>
+            <option value="teacher">Teacher</option>
+            <option value="canteen">Canteen Worker</option>
+            <option value="management">School Management</option>
+          </select>
+        </div>
+
+        <button type="submit" class="w-full py-2.5 bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-lg text-sm transition shadow-md">
+          Sign In to EcoKSK
+        </button>
+      </form>
+
+      <!-- REGISTER FORM -->
+      <form id="signup-form" onsubmit="handleRegister(event)" class="space-y-4 hidden">
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Full Name</label>
+          <input type="text" id="reg-fullname" placeholder="Aiman Hakim" required class="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-500">
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Account Role</label>
+          <select id="reg-role" onchange="toggleRegClassField()" class="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:border-brand-500">
+            <option value="student">Student</option>
+            <option value="teacher">Teacher</option>
+          </select>
+        </div>
+
+        <div id="reg-class-container">
+          <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Class / Form</label>
+          <input type="text" id="reg-class" placeholder="5 Al-Farabi" class="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-500">
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Email Address</label>
+          <input type="email" id="reg-email" placeholder="student@school.edu.my" required class="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-500">
+        </div>
+
+        <button type="submit" class="w-full py-2.5 bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-lg text-sm transition shadow-md">
+          Complete Registration
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- SIDEBAR NAVIGATION -->
+  <aside id="app-sidebar" class="hidden md:flex flex-col w-64 bg-slate-900 text-slate-300 min-h-screen p-4 sticky top-0 h-screen overflow-y-auto no-scrollbar">
+    <div class="flex items-center gap-3 px-3 py-4 border-b border-slate-800 mb-6">
+      <div class="p-2 bg-brand-500/20 text-brand-400 rounded-xl">
+        <i data-lucide="leaf" class="w-6 h-6"></i>
+      </div>
+      <div>
+        <h2 class="font-bold text-white tracking-wide">EcoKSK</h2>
+        <span class="text-[10px] bg-brand-900 text-brand-300 px-2 py-0.5 rounded-full font-medium">SDG 12 System</span>
+      </div>
+    </div>
+
+    <div class="bg-slate-800/60 rounded-xl p-3 mb-6 flex items-center gap-3 border border-slate-700/50">
+      <div class="w-10 h-10 rounded-full bg-brand-600 text-white font-bold flex items-center justify-center text-sm shadow" id="nav-user-avatar">AH</div>
+      <div class="overflow-hidden">
+        <p class="text-sm font-semibold text-white truncate" id="nav-user-name">Pengguna</p>
+        <span class="text-xs text-brand-400 capitalize" id="nav-user-role">Student</span>
+      </div>
+    </div>
+
+    <nav class="space-y-1 flex-1" id="sidebar-menu"></nav>
+
+    <div class="pt-4 border-t border-slate-800 space-y-2">
+      <button onclick="handleLogout()" class="w-full flex items-center gap-3 px-3 py-2.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-xl transition text-sm font-medium">
+        <i data-lucide="log-out" class="w-4 h-4"></i> Sign Out
+      </button>
+    </div>
+  </aside>
+
+  <!-- MAIN CONTENT AREA -->
+  <main class="flex-1 p-4 md:p-8 max-w-7xl mx-auto w-full overflow-x-hidden">
+    <div id="pages-container">
+      <!-- DASHBOARD PAGE -->
+      <section id="page-dashboard" class="space-y-6">
+        <div class="bg-gradient-to-r from-brand-700 via-brand-600 to-ocean-600 rounded-3xl p-6 md:p-8 text-white shadow-xl relative overflow-hidden">
+          <div class="relative z-10 max-w-2xl">
+            <span class="bg-white/20 backdrop-blur-md px-3 py-1 rounded-full text-xs font-semibold">Canteen Plastic Reduction</span>
+            <h2 class="text-2xl md:text-3xl font-extrabold mt-2" id="dash-welcome-title">Selamat Kembali! 🌱</h2>
+            <p class="text-brand-100 text-sm mt-1">Setiap pengelakan plastik membawa sekolah kita lebih dekat kepada sasaran SDG 12!</p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+            <span class="text-xs font-bold uppercase text-slate-500">Mata Eco</span>
+            <p class="text-3xl font-extrabold text-slate-800 mt-2" id="dash-eco-points">0</p>
+          </div>
+          <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+            <span class="text-xs font-bold uppercase text-slate-500">Plastik Dielakkan</span>
+            <p class="text-3xl font-extrabold text-slate-800 mt-2" id="dash-plastic-avoided">0 item</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- CANTEEN PAGE -->
+      <section id="page-canteen" class="space-y-6 hidden">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h2 class="text-2xl font-extrabold text-slate-800">Kaunter Kantin Express</h2>
+            <p class="text-xs text-slate-500">Imbas QR dan rekod penggunaan bekas & sudu pelanggan.</p>
+          </div>
+          <button onclick="simulateQRScan()" class="py-3 px-6 bg-brand-600 hover:bg-brand-700 text-white font-bold rounded-2xl shadow-lg transition flex items-center gap-2">
+            <i data-lucide="qr-code" class="w-5 h-5"></i> 📷 Imbas Kod QR
+          </button>
+        </div>
+
+        <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 space-y-6">
+          <div class="flex items-center gap-3 pb-4 border-b border-slate-100">
+            <div class="w-12 h-12 rounded-full bg-brand-100 text-brand-700 font-bold flex items-center justify-center text-lg" id="canteen-user-avatar">AH</div>
+            <div>
+              <h3 class="text-xl font-extrabold text-slate-800" id="canteen-user-name">Pengguna Kantin</h3>
+              <p class="text-xs text-slate-500"><span id="canteen-user-id">STU001</span> • <span id="canteen-user-class">5 Al-Farabi</span> • Mata: <strong id="canteen-user-pts" class="text-brand-600">0</strong></p>
+            </div>
+          </div>
+
+          <form id="canteen-form" onsubmit="handleCanteenTransaction(event)" class="space-y-6">
+            <div class="grid md:grid-cols-3 gap-6">
+              <div class="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                <label class="block text-xs font-bold uppercase text-slate-700">Bekas Makanan</label>
+                <div class="space-y-2">
+                  <label class="flex items-center gap-3 p-3 bg-white rounded-xl border border-slate-200 cursor-pointer">
+                    <input type="radio" name="food_container" value="own" checked class="text-brand-600">
+                    <span class="text-xs font-semibold">♻️ Bekas Sendiri (+10 pts)</span>
+                  </label>
+                  <label class="flex items-center gap-3 p-3 bg-white rounded-xl border border-slate-200 cursor-pointer">
+                    <input type="radio" name="food_container" value="plastic" class="text-brand-600">
+                    <span class="text-xs font-semibold">🛍️ Bekas Plastik (+0 pts)</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                <label class="block text-xs font-bold uppercase text-slate-700">Minuman</label>
+                <div class="space-y-2">
+                  <label class="flex items-center gap-3 p-3 bg-white rounded-xl border border-slate-200 cursor-pointer">
+                    <input type="radio" name="drink_container" value="own" checked class="text-brand-600">
+                    <span class="text-xs font-semibold">🥤 Botol Sendiri (+10 pts)</span>
+                  </label>
+                  <label class="flex items-center gap-3 p-3 bg-white rounded-xl border border-slate-200 cursor-pointer">
+                    <input type="radio" name="drink_container" value="plastic" class="text-brand-600">
+                    <span class="text-xs font-semibold">🥤 Cawan Plastik (+0 pts)</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                <label class="block text-xs font-bold uppercase text-slate-700">Sudu & Garfu</label>
+                <div class="space-y-2">
+                  <label class="flex items-center gap-3 p-3 bg-white rounded-xl border border-slate-200 cursor-pointer">
+                    <input type="radio" name="utensils" value="reusable" checked class="text-brand-600">
+                    <span class="text-xs font-semibold">🥄 Sudu Sendiri (+5 pts)</span>
+                  </label>
+                  <label class="flex items-center gap-3 p-3 bg-white rounded-xl border border-slate-200 cursor-pointer">
+                    <input type="radio" name="utensils" value="plastic" class="text-brand-600">
+                    <span class="text-xs font-semibold">🍴 Sudu Plastik (+0 pts)</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <button type="submit" class="w-full py-3 bg-brand-600 hover:bg-brand-700 text-white font-bold rounded-2xl shadow-lg transition">
+              Simpan Transaksi & Beri Mata Eco
+            </button>
+          </form>
+        </div>
+
+        <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 space-y-4">
+          <h3 class="font-bold text-slate-800 text-lg">Log Kaunter Hari Ini</h3>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr class="border-b border-slate-200 text-slate-400 font-semibold uppercase">
+                  <th class="py-3 px-4">Masa</th>
+                  <th class="py-3 px-4">Pengguna</th>
+                  <th class="py-3 px-4">ID</th>
+                  <th class="py-3 px-4">Bekas</th>
+                  <th class="py-3 px-4">Minuman</th>
+                  <th class="py-3 px-4">Sudu</th>
+                  <th class="py-3 px-4 text-right">Mata</th>
+                </tr>
+              </thead>
+              <tbody id="canteen-log-tbody" class="divide-y divide-slate-100 text-slate-700 font-medium"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- QR CODE PAGE -->
+      <section id="page-qrcode" class="space-y-6 hidden">
+        <div class="max-w-md mx-auto bg-white rounded-3xl p-6 md:p-8 shadow-xl border border-slate-100 text-center space-y-6">
+          <h2 class="text-2xl font-extrabold text-slate-800">Kod QR Eco Saya</h2>
+          <div class="p-4 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col items-center justify-center">
+            <div id="qrcode-display" class="p-2 bg-white rounded-xl shadow-inner mb-3"></div>
+          </div>
+          <div class="space-y-1 bg-brand-50/50 p-4 rounded-xl border border-brand-100">
+            <h3 class="font-bold text-slate-800 text-lg" id="qr-user-name">Pengguna</h3>
+            <p class="text-xs font-semibold text-brand-700" id="qr-user-id">ID: STU001</p>
+            <p class="text-xs text-slate-600" id="qr-user-class">Kelas</p>
+            <div class="inline-block mt-2 bg-brand-600 text-white text-xs px-3 py-1 rounded-full font-bold">
+              Mata Semasa: <span id="qr-user-points">0</span> pts
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- HISTORY PAGE -->
+      <section id="page-history" class="space-y-6 hidden">
+        <div class="bg-white rounded-3xl p-6 md:p-8 shadow-sm border border-slate-100 space-y-4">
+          <h2 class="text-2xl font-extrabold text-slate-800">Sejarah Pembelian Kantin</h2>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr class="border-b border-slate-200 text-slate-400 font-semibold uppercase">
+                  <th class="py-3 px-4">Masa</th>
+                  <th class="py-3 px-4">Bekas Makanan</th>
+                  <th class="py-3 px-4">Minuman</th>
+                  <th class="py-3 px-4">Sudu</th>
+                  <th class="py-3 px-4 text-right">Mata Eco</th>
+                </tr>
+              </thead>
+              <tbody id="student-history-tbody" class="divide-y divide-slate-100 text-slate-700 font-medium"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- REWARDS PAGE -->
+      <section id="page-rewards" class="space-y-6 hidden">
+        <div class="flex items-center justify-between">
+          <h2 class="text-2xl font-extrabold text-slate-800">Kedai Tebuk Ganjaran</h2>
+          <div class="text-sm font-bold text-slate-700">Baki Mata: <span id="rewards-balance" class="text-brand-600">0</span> pts</div>
+        </div>
+        <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6" id="rewards-grid"></div>
+      </section>
+
+      <!-- LEADERBOARD PAGE -->
+      <section id="page-leaderboard" class="space-y-6 hidden">
+        <h2 class="text-2xl font-extrabold text-slate-800">Papan Kedudukan Juara Hijau</h2>
+        <div class="space-y-3" id="leaderboard-list"></div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
+```
